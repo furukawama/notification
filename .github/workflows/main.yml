@@ -34,6 +34,12 @@ jobs:
               "0018-2613": "Historische Zeitschrift",
               "0031-2746": "Past & Present",
               "0071-9706": "Frühmittelalterliche Studien",
+              "0035-4473": "Rheinische Vierteljahrsblätter",
+              "0170-2025": "Jahrbuch für westdeutsche Landesgeschichte",
+              "0340-0174": "Zeitschrift für Historische Forschung",
+              "0066-6432": "Archiv für mittelrheinische Kirchengeschichte",
+              "0006-4408": "Blätter für Deutsche Landesgeschichte",
+              "1867-6448": "Francia",
               "1615-7885": "Europa im Mittelalter",
               "0452-490X": "Vorträge und Forschungen"
           }
@@ -53,29 +59,15 @@ jobs:
           updates = []
 
           headers = {"User-Agent": "GitHubActions-JournalChecker/1.0"}
-          url = "https://api.crossref.org/works"
           
           for issn, title in journals.items():
-              # 第1ルート：ISSNで検索
+              url = "https://api.crossref.org/works"
               params = {"filter": f"issn:{issn}", "sort": "published", "order": "desc", "select": "volume,issue,title", "rows": 5}
               
               try:
                   response = requests.get(url, params=params, headers=headers, timeout=15)
                   response.raise_for_status()
                   items = response.json().get("message", {}).get("items", [])
-                  
-                  # 第2ルート（フォールバック）：ISSNで見つからない場合はシリーズ名で検索
-                  if not items:
-                      print(f"{title}: ISSNで見つからないため、シリーズ名で再検索します...")
-                      fallback_params = {
-                          "query.container-title": title,
-                          "sort": "published",
-                          "order": "desc",
-                          "select": "volume,issue,title",
-                          "rows": 5
-                      }
-                      response = requests.get(url, params=fallback_params, headers=headers, timeout=15)
-                      items = response.json().get("message", {}).get("items", [])
                   
                   latest_issue = None
                   if items:
@@ -107,6 +99,7 @@ jobs:
           with open(state_file, "w", encoding="utf-8") as f:
               json.dump(new_state, f, ensure_ascii=False, indent=2)
 
+          # 結果を環境変数とサマリーに書き込む
           summary_file = os.getenv('GITHUB_STEP_SUMMARY')
           with open(summary_file, "a", encoding="utf-8") as f:
               f.write("### 📚 監視ジャーナル・叢書 最新ステータス\n\n")
@@ -123,7 +116,7 @@ jobs:
               else:
                   f.write("*今回は新しい更新はありませんでした。*\n\n---\n")
                   
-              f.write("#### 🔍 全5誌の現在の取得状況\n")
+              f.write("#### 🔍 全誌の現在の取得状況\n")
               for issn, title in journals.items():
                   current = new_state.get(issn, "Unknown")
                   mark = "🆕" if any(u[1] == issn for u in updates) else "✔️"
