@@ -1,8 +1,7 @@
-name: Journal Update Checker
+name: Journal Update Checker (Python Version)
 
 on:
   schedule:
-    # 3か月ごと（1, 4, 7, 10月）の1日 午前9時(日本時間)に実行
     - cron: '0 0 1 1,4,7,10 *'
   workflow_dispatch:
 
@@ -13,43 +12,73 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Check Journal Issue
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: pip install beautifulsoup4 requests
+
+      - name: Check Journal Issue with Python
         id: check_site
         run: |
-          URL="https://www.degruyterbrill.com/journal/key/hzhz/html"
-          
-          # ロボット弾きを回避するため、一般的なブラウザのふりをしてサイトのデータを取得
-          curl -sL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" $URL > site_content.txt
-          
-          # 「Volume」から始まり「Issue」を含む行を、見えない改行やタグを跨いで柔軟に探す
-          CURRENT_ISSUE=$(grep -oP 'Volume\s+\d+[^<]*Issue\s+\d+' site_content.txt | head -n 1)
-          
-          # 見つからない場合の予備ルート（シンプルなカンマやコロン区切り）
-          if [ -z "$CURRENT_ISSUE" ]; then
-            CURRENT_ISSUE=$(grep -oP 'Volume\s*\d+\s*[,:]?\s*Issue\s*\d+' site_content.txt | head -n 1)
-          fi
+          cat << 'EOF' > check_issue.py
+          import requests
+          from bs4 import BeautifulSoup
+          import re
+          import sys
+          import os
 
-          # 抽出できた文字をログに表示（動作確認用）
-          echo "DEBUG: Extracted text is [$CURRENT_ISSUE]"
-
-          # 万が一空っぽの場合はここで処理を止める
-          if [ -z "$CURRENT_ISSUE" ]; then
-            echo "エラー：サイトから巻号情報を取得できませんでした。サイトの構造が変わった可能性があります。"
-            exit 1
-          fi
-
-          # 後のステップで使えるように環境変数として保存
-          echo "CURRENT_ISSUE=$CURRENT_ISSUE" >> $GITHUB_ENV
+          url = "https://www.degruyterbrill.com/journal/key/hzhz/html"
+          headers = {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              "Accept-Language": "en-US,en;q=0.9"
+          }
           
-          # 前回のデータと比較
+          print(f"アクセス中: {url}")
+          try:
+              response = requests.get(url, headers=headers, timeout=15)
+          except requests.exceptions.RequestException as e:
+              print(f"通信エラー: {e}")
+              sys.exit(1)
+              
+          if response.status_code != 200:
+              print(f"エラー: ステータスコード {response.status_code}")
+              sys.exit(1)
+              
+          # BeautifulSoupでHTMLタグをすべて取り除き、プレーンテキストにする
+          soup = BeautifulSoup(response.text, "html.parser")
+          clean_text = soup.get_text(separator=' ')
+          
+          # Volume X Issue Y のパターンを探す（大文字小文字を区別しない）
+          match = re.search(r'Volume\s+\d+.*?Issue\s+\d+', clean_text, re.IGNORECASE)
+          
+          if match:
+              issue_text = match.group(0).strip()
+              print(f"DEBUG: Extracted text is [{issue_text}]")
+              
+              # GitHub Actionsの環境変数に書き込む
+              env_file = os.getenv('GITHUB_ENV')
+              with open(env_file, "a") as f:
+                  f.write(f"CURRENT_ISSUE={issue_text}\n")
+          else:
+              print("エラー：巻号情報が見つかりませんでした。")
+              print("--- 取得したサイトテキストの冒頭1000文字を出力します ---")
+              print(clean_text[:1000])
+              sys.exit(1)
+          EOF
+          
+          python check_issue.py
+
+      - name: Compare and Save Status
+        run: |
           if [ -f last_issue.txt ]; then
             LAST_ISSUE=$(cat last_issue.txt)
             if [ "$CURRENT_ISSUE" != "$LAST_ISSUE" ]; then
               echo "CHANGED=true" >> $GITHUB_ENV
             fi
           fi
-          
-          # 今回の号数をファイルに書き込む
           echo "$CURRENT_ISSUE" > last_issue.txt
 
       - name: Update last_issue.txt in Repository
@@ -67,11 +96,9 @@ jobs:
           echo "### 📢 雑誌の更新を検知しました！" >> $GITHUB_STEP_SUMMARY
           echo "- **対象:** Historische Zeitschrift" >> $GITHUB_STEP_SUMMARY
           echo "- **最新号:** $CURRENT_ISSUE" >> $GITHUB_STEP_SUMMARY
-          echo "- [サイトを確認する](https://www.degruyterbrill.com/journal/key/hzhz/html)" >> $GITHUB_STEP_SUMMARY
 
       - name: Notify via Email (Force Fail)
         if: env.CHANGED == 'true'
         run: |
-          echo "【通知】Historische Zeitschrift の最新刊が更新されました！"
-          echo "最新の号数: $CURRENT_ISSUE"
+          echo "【通知】最新刊が更新されました！最新号: $CURRENT_ISSUE"
           exit 1
