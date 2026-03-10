@@ -12,5 +12,5 @@ jobs:
     steps:
       - name: Force Update Notification Test
         run: |
-          echo "これはテストです。強制的に通知（エラー）を送ります。"
+          echo "これはテストです。強制的に通知（エラー）を送ります"
           exit 1 # ここで強制的に「赤いバツ」を出す
