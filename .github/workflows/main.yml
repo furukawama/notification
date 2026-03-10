@@ -1,4 +1,4 @@
-name: Journal Update Checker (API Version)
+name: Multiple Journals Update Checker
 
 on:
   schedule:
@@ -20,92 +20,127 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Check Journal Issue via Crossref API
+      - name: Check Journals via Crossref API
         id: check_site
         run: |
-          cat << 'EOF' > check_issue.py
+          cat << 'EOF' > check_issues.py
           import requests
           import sys
           import os
+          import json
+          import time
 
-          # Historische Zeitschrift の ISSN
-          issn = "0018-2613"
-          
-          # 学術論文のグローバルデータベース「Crossref」のAPIを使用
-          url = f"https://api.crossref.org/journals/{issn}/works"
-          params = {
-              "sort": "published",
-              "order": "desc",
-              "select": "volume,issue,published",
-              "rows": 20  # 最新20件の記事データを取得
+          # 監視する雑誌のリスト（追加・削除もここで簡単にできます）
+          journals = {
+              "0018-2613": "Historische Zeitschrift",
+              "0031-2746": "Past & Present",
+              "0071-9706": "Frühmittelalterliche Studien",
+              "1615-7885": "Europa im Mittelalter",
+              "0452-490X": "Vorträge und Forschungen"
           }
-          headers = {
-              "User-Agent": "GitHubActions-JournalChecker/1.0"
-          }
+
+          # 5誌のデータをまとめて保存するファイル
+          state_file = "last_issues.json"
           
-          print("Crossref APIにアクセスして最新号のデータを取得中...")
-          try:
-              response = requests.get(url, params=params, headers=headers, timeout=15)
-              response.raise_for_status()
-              data = response.json()
-          except Exception as e:
-              print(f"通信エラー: {e}")
-              sys.exit(1)
-              
-          items = data.get("message", {}).get("items", [])
-          latest_issue = None
-          
-          # 取得した記事の中から、VolumeとIssueの番号が両方ある最新のものを探す
-          for item in items:
-              vol = item.get("volume")
-              iss = item.get("issue")
-              if vol and iss:
-                  latest_issue = f"Volume {vol}: Issue {iss}"
-                  break
-                  
-          if latest_issue:
-              print(f"DEBUG: Extracted text is [{latest_issue}]")
-              
-              # GitHub Actionsの環境変数に書き込む
-              env_file = os.getenv('GITHUB_ENV')
-              with open(env_file, "a") as f:
-                  f.write(f"CURRENT_ISSUE={latest_issue}\n")
+          if os.path.exists(state_file):
+              with open(state_file, "r", encoding="utf-8") as f:
+                  try:
+                      last_state = json.load(f)
+                  except:
+                      last_state = {}
           else:
-              print("エラー：Crossrefデータベースから巻号情報が見つかりませんでした。")
-              sys.exit(1)
+              last_state = {}
+
+          new_state = {}
+          updates = []
+
+          headers = {"User-Agent": "GitHubActions-JournalChecker/1.0"}
+
+          print("Crossref APIから各雑誌の最新号を取得します...\n")
+          
+          for issn, title in journals.items():
+              print(f"■ {title} (ISSN: {issn}) を確認中...")
+              url = f"https://api.crossref.org/journals/{issn}/works"
+              params = {"sort": "published", "order": "desc", "select": "volume,issue,published,title", "rows": 20}
+              
+              try:
+                  response = requests.get(url, params=params, headers=headers, timeout=15)
+                  response.raise_for_status()
+                  data = response.json()
+                  items = data.get("message", {}).get("items", [])
+                  
+                  latest_issue = None
+                  for item in items:
+                      vol = item.get("volume")
+                      iss = item.get("issue")
+                      if vol and iss:
+                          latest_issue = f"Volume {vol}: Issue {iss}"
+                          break
+                      elif vol: # Issueがない場合（年刊誌など）
+                          latest_issue = f"Volume {vol}"
+                          break
+                  
+                  # Volume情報すら無い叢書などの場合の予備手段（最新記事のタイトルを取得）
+                  if not latest_issue and items:
+                      latest_title = items[0].get("title", [""])[0]
+                      if len(latest_title) > 60:
+                          latest_title = latest_title[:60] + "..."
+                      latest_issue = f"Latest: {latest_title}"
+                      
+                  if latest_issue:
+                      new_state[issn] = latest_issue
+                      old_issue = last_state.get(issn)
+                      
+                      if old_issue != latest_issue:
+                          updates.append((title, issn, latest_issue))
+                          print(f"  -> 💡 更新あり: {latest_issue}")
+                      else:
+                          print(f"  -> 変更なし: {latest_issue}")
+                  else:
+                      new_state[issn] = last_state.get(issn, "Unknown")
+                      print("  -> 巻号情報が見つかりませんでした")
+                      
+              except Exception as e:
+                  print(f"  -> ❌ エラー: {e}")
+                  new_state[issn] = last_state.get(issn, "Error")
+                  
+              time.sleep(1) # APIサーバーに負担をかけないための1秒待機
+
+          # 全雑誌の状態をJSONファイルに保存
+          with open(state_file, "w", encoding="utf-8") as f:
+              json.dump(new_state, f, ensure_ascii=False, indent=2)
+
+          # GitHub Actionsへ結果を渡す
+          if updates:
+              env_file = os.getenv('GITHUB_ENV')
+              with open(env_file, "a", encoding="utf-8") as f:
+                  f.write("CHANGED=true\n")
+                  
+              summary_file = os.getenv('GITHUB_STEP_SUMMARY')
+              with open(summary_file, "a", encoding="utf-8") as f:
+                  f.write("### 📢 雑誌の更新を検知しました！\n\n")
+                  for title, issn, new in updates:
+                      f.write(f"- **{title}** (ISSN: `{issn}`)\n")
+                      f.write(f"  - 新着: {new}\n")
           EOF
           
-          python check_issue.py
+          python check_issues.py
 
-      - name: Compare and Save Status
-        run: |
-          if [ -f last_issue.txt ]; then
-            LAST_ISSUE=$(cat last_issue.txt)
-            if [ "$CURRENT_ISSUE" != "$LAST_ISSUE" ]; then
-              echo "CHANGED=true" >> $GITHUB_ENV
-            fi
-          fi
-          echo "$CURRENT_ISSUE" > last_issue.txt
-
-      - name: Update last_issue.txt in Repository
+      - name: Update Repository
         if: env.CHANGED == 'true'
         run: |
           git config user.name "github-actions"
           git config user.email "action@github.com"
-          git add last_issue.txt
-          git commit -m "Update journal issue to $CURRENT_ISSUE"
+          git add last_issues.json
+          # 古いテキストファイルが残っていたら自動的にお掃除します
+          rm -f last_issue.txt
+          git rm --cached --ignore-unmatch last_issue.txt || true
+          git commit -m "Update multiple journal issues"
           git push
-
-      - name: Create Summary
-        if: env.CHANGED == 'true'
-        run: |
-          echo "### 📢 雑誌の更新を検知しました！" >> $GITHUB_STEP_SUMMARY
-          echo "- **対象:** Historische Zeitschrift" >> $GITHUB_STEP_SUMMARY
-          echo "- **最新号:** $CURRENT_ISSUE" >> $GITHUB_STEP_SUMMARY
-          echo "- [サイトを確認する](https://www.degruyterbrill.com/journal/key/hzhz/html)" >> $GITHUB_STEP_SUMMARY
 
       - name: Notify via Email (Force Fail)
         if: env.CHANGED == 'true'
         run: |
-          echo "【通知】最新刊が更新されました！最新号: $CURRENT_ISSUE"
+          echo "【通知】登録している学術誌の最新刊が更新されました！"
+          echo "詳細はGitHubのSummary（ログ画面）を確認してください。"
           exit 1
