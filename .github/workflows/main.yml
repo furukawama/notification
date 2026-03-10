@@ -1,0 +1,9 @@
+name: My First Action
+on: [push] # ファイルが保存（Push）された時に動く設定
+
+jobs:
+  say-hello:
+    runs-on: ubuntu-latest # GitHubが貸してくれるパソコンの種類
+    steps:
+      - name: Greet the user
+        run: echo "こんにちは！GitHub Actionsが動いています。"
