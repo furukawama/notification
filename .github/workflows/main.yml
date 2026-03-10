@@ -4,7 +4,7 @@ on:
   schedule:
     # 3か月ごと（1, 4, 7, 10月）の1日 午前9時(日本時間)に実行
     - cron: '0 0 1 1,4,7,10 *'
-  workflow_dispatch: # 手動でいつでもチェックできるボタン
+  workflow_dispatch:
 
 jobs:
   check:
@@ -17,20 +17,39 @@ jobs:
         id: check_site
         run: |
           URL="https://www.degruyterbrill.com/journal/key/hzhz/html"
-          # 最新の号数を取得
-          CURRENT_ISSUE=$(curl -sL $URL | grep -oP 'Volume\s+\d+:\s+Issue\s+\d+' | head -n 1)
-          echo "Current Issue: $CURRENT_ISSUE"
+          
+          # ロボット弾きを回避するため、一般的なブラウザのふりをしてサイトのデータを取得
+          curl -sL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" $URL > site_content.txt
+          
+          # 「Volume」から始まり「Issue」を含む行を、見えない改行やタグを跨いで柔軟に探す
+          CURRENT_ISSUE=$(grep -oP 'Volume\s+\d+[^<]*Issue\s+\d+' site_content.txt | head -n 1)
+          
+          # 見つからない場合の予備ルート（シンプルなカンマやコロン区切り）
+          if [ -z "$CURRENT_ISSUE" ]; then
+            CURRENT_ISSUE=$(grep -oP 'Volume\s*\d+\s*[,:]?\s*Issue\s*\d+' site_content.txt | head -n 1)
+          fi
 
+          # 抽出できた文字をログに表示（動作確認用）
+          echo "DEBUG: Extracted text is [$CURRENT_ISSUE]"
+
+          # 万が一空っぽの場合はここで処理を止める
+          if [ -z "$CURRENT_ISSUE" ]; then
+            echo "エラー：サイトから巻号情報を取得できませんでした。サイトの構造が変わった可能性があります。"
+            exit 1
+          fi
+
+          # 後のステップで使えるように環境変数として保存
+          echo "CURRENT_ISSUE=$CURRENT_ISSUE" >> $GITHUB_ENV
+          
           # 前回のデータと比較
           if [ -f last_issue.txt ]; then
             LAST_ISSUE=$(cat last_issue.txt)
             if [ "$CURRENT_ISSUE" != "$LAST_ISSUE" ]; then
               echo "CHANGED=true" >> $GITHUB_ENV
-              echo "Site has been updated!"
             fi
           fi
           
-          # 今回の号数をファイルに書き込む（次回の比較用）
+          # 今回の号数をファイルに書き込む
           echo "$CURRENT_ISSUE" > last_issue.txt
 
       - name: Update last_issue.txt in Repository
@@ -39,11 +58,20 @@ jobs:
           git config user.name "github-actions"
           git config user.email "action@github.com"
           git add last_issue.txt
-          git commit -m "Update last_issue.txt to $CURRENT_ISSUE"
+          git commit -m "Update journal issue to $CURRENT_ISSUE"
           git push
+
+      - name: Create Summary
+        if: env.CHANGED == 'true'
+        run: |
+          echo "### 📢 雑誌の更新を検知しました！" >> $GITHUB_STEP_SUMMARY
+          echo "- **対象:** Historische Zeitschrift" >> $GITHUB_STEP_SUMMARY
+          echo "- **最新号:** $CURRENT_ISSUE" >> $GITHUB_STEP_SUMMARY
+          echo "- [サイトを確認する](https://www.degruyterbrill.com/journal/key/hzhz/html)" >> $GITHUB_STEP_SUMMARY
 
       - name: Notify via Email (Force Fail)
         if: env.CHANGED == 'true'
         run: |
           echo "【通知】Historische Zeitschrift の最新刊が更新されました！"
-          exit 1 # わざとエラーにしてGitHubから通知メールを飛ばす
+          echo "最新の号数: $CURRENT_ISSUE"
+          exit 1
