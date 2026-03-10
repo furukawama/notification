@@ -2,9 +2,8 @@ name: Journal Update Checker
 
 on:
   schedule:
-    # 3か月ごと（1, 4, 7, 10月）の1日 午前9時(日本時間)に実行
     - cron: '0 0 1 1,4,7,10 *'
-  workflow_dispatch: # 手動実行用ボタン
+  workflow_dispatch:
 
 jobs:
   check:
@@ -17,36 +16,15 @@ jobs:
         id: check_site
         run: |
           URL="https://www.degruyterbrill.com/journal/key/hzhz/html"
-          
-          # サイトから「Issue」の情報を抽出（#issuesセクション内の最初の巻号情報を取得）
-          # サイトの構造に合わせ、正規表現で Volume と Issue の数字部分を抜き出します
           CURRENT_ISSUE=$(curl -sL $URL | grep -oP 'Volume\s+\d+:\s+Issue\s+\d+' | head -n 1)
-          
           echo "Current Issue found: $CURRENT_ISSUE"
-
-          # 前回のデータと比較
-          if [ -f last_issue.txt ]; then
-            LAST_ISSUE=$(cat last_issue.txt)
-            if [ "$CURRENT_ISSUE" != "$LAST_ISSUE" ]; then
-              echo "CHANGED=true" >> $GITHUB_ENV
-            fi
-          fi
-          
-          # 今回取得した号数を保存
           echo "$CURRENT_ISSUE" > last_issue.txt
 
-- name: Save Status
-        # if の行を削除しました（これで強制的に保存されます）
+      - name: Save Status
         run: |
           git config user.name "github-actions"
           git config user.email "action@github.com"
           git add last_issue.txt
-          git commit -m "New issue detected: $(cat last_issue.txt)"
+          # 変更がある場合のみコミットし、ない場合はエラーにせず終了する
+          git commit -m "Update journal status" || exit 0
           git push
-
-      - name: Notify via Email (Force Fail)
-        if: env.CHANGED == 'true'
-        run: |
-          echo "【通知】雑誌の最新刊が更新されました！"
-          echo "最新の号数: $(cat last_issue.txt)"
-          exit 1 # エラーを発生させてメールを飛ばす
