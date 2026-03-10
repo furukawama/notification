@@ -35,8 +35,8 @@ jobs:
           # 今回取得した号数を保存
           echo "$CURRENT_ISSUE" > last_issue.txt
 
-      - name: Save Status
-        if: env.CHANGED == 'true'
+- name: Save Status
+        # if の行を削除しました（これで強制的に保存されます）
         run: |
           git config user.name "github-actions"
           git config user.email "action@github.com"
