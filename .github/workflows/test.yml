@@ -1,0 +1,51 @@
+name: Website Update Checker
+
+on:
+  schedule:
+    # 3か月ごと（1, 4, 7, 10月）の1日 午前9時(日本時間)に実行
+    - cron: '0 0 1 1,4,7,10 *'
+  workflow_dispatch: # ボタンを押して手動でテストするための設定
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check Website
+        id: check_site
+        run: |
+          # --- 設定エリア ---
+          URL="https://www.degruyterbrill.com/journal/key/hzhz/html" # チェックしたいサイトURLに変えてください
+          TARGET_TEXT="<span class="dgb-volume-title">Volume 322</span> |"        # サイト内にある「変化を監視したい文字」を指定してください
+          # ----------------
+
+          # サイトの内容を取得
+          CURRENT_CONTENT=$(curl -s $URL | grep -o "$TARGET_TEXT" | head -n 1)
+          
+          # 前回の保存があるか確認
+          if [ -f last_content.txt ]; then
+            LAST_CONTENT=$(cat last_content.txt)
+            if [ "$CURRENT_CONTENT" != "$LAST_CONTENT" ]; then
+              echo "CHANGED=true" >> $GITHUB_ENV
+            fi
+          fi
+          
+          # 今回の内容を保存
+          echo "$CURRENT_CONTENT" > last_content.txt
+
+      - name: Update Repository
+        if: env.CHANGED == 'true'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "action@github.com"
+          git add last_content.txt
+          git commit -m "Site updated"
+          git push
+
+      - name: Send Notification via Email (Force Fail)
+        if: env.CHANGED == 'true'
+        run: |
+          echo "サイトに更新がありました！このメールは通知用です。"
+          exit 1 # わざとエラーを出してGitHubからメールを送らせる
