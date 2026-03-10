@@ -30,7 +30,6 @@ jobs:
           import json
           import time
 
-          # 監視する雑誌のリスト（追加・削除もここで簡単にできます）
           journals = {
               "0018-2613": "Historische Zeitschrift",
               "0031-2746": "Past & Present",
@@ -39,7 +38,6 @@ jobs:
               "0452-490X": "Vorträge und Forschungen"
           }
 
-          # 5誌のデータをまとめて保存するファイル
           state_file = "last_issues.json"
           
           if os.path.exists(state_file):
@@ -56,12 +54,20 @@ jobs:
 
           headers = {"User-Agent": "GitHubActions-JournalChecker/1.0"}
 
-          print("Crossref APIから各雑誌の最新号を取得します...\n")
+          print("Crossref APIから各雑誌・叢書の最新データを取得します...\n")
           
           for issn, title in journals.items():
               print(f"■ {title} (ISSN: {issn}) を確認中...")
-              url = f"https://api.crossref.org/journals/{issn}/works"
-              params = {"sort": "published", "order": "desc", "select": "volume,issue,published,title", "rows": 20}
+              
+              # 変更点：雑誌専用ルートではなく、全体からISSNで絞り込むルートを使用
+              url = "https://api.crossref.org/works"
+              params = {
+                  "filter": f"issn:{issn}",
+                  "sort": "published",
+                  "order": "desc",
+                  "select": "volume,issue,title,type",
+                  "rows": 10
+              }
               
               try:
                   response = requests.get(url, params=params, headers=headers, timeout=15)
@@ -70,23 +76,24 @@ jobs:
                   items = data.get("message", {}).get("items", [])
                   
                   latest_issue = None
-                  for item in items:
+                  
+                  if items:
+                      # 最新のデータ1件目を基準にする
+                      item = items[0]
                       vol = item.get("volume")
                       iss = item.get("issue")
+                      title_list = item.get("title", [])
+                      item_title = title_list[0] if title_list else "No Title"
+                      
                       if vol and iss:
                           latest_issue = f"Volume {vol}: Issue {iss}"
-                          break
-                      elif vol: # Issueがない場合（年刊誌など）
+                      elif vol:
                           latest_issue = f"Volume {vol}"
-                          break
+                      else:
+                          # 巻号がない論文集の場合は、タイトルの冒頭60文字を最新情報として扱う
+                          short_title = item_title[:60] + "..." if len(item_title) > 60 else item_title
+                          latest_issue = f"最新刊: {short_title}"
                   
-                  # Volume情報すら無い叢書などの場合の予備手段（最新記事のタイトルを取得）
-                  if not latest_issue and items:
-                      latest_title = items[0].get("title", [""])[0]
-                      if len(latest_title) > 60:
-                          latest_title = latest_title[:60] + "..."
-                      latest_issue = f"Latest: {latest_title}"
-                      
                   if latest_issue:
                       new_state[issn] = latest_issue
                       old_issue = last_state.get(issn)
@@ -98,19 +105,17 @@ jobs:
                           print(f"  -> 変更なし: {latest_issue}")
                   else:
                       new_state[issn] = last_state.get(issn, "Unknown")
-                      print("  -> 巻号情報が見つかりませんでした")
+                      print("  -> データが見つかりませんでした")
                       
               except Exception as e:
                   print(f"  -> ❌ エラー: {e}")
                   new_state[issn] = last_state.get(issn, "Error")
                   
-              time.sleep(1) # APIサーバーに負担をかけないための1秒待機
+              time.sleep(1) # サーバー負荷軽減
 
-          # 全雑誌の状態をJSONファイルに保存
           with open(state_file, "w", encoding="utf-8") as f:
               json.dump(new_state, f, ensure_ascii=False, indent=2)
 
-          # GitHub Actionsへ結果を渡す
           if updates:
               env_file = os.getenv('GITHUB_ENV')
               with open(env_file, "a", encoding="utf-8") as f:
@@ -118,10 +123,10 @@ jobs:
                   
               summary_file = os.getenv('GITHUB_STEP_SUMMARY')
               with open(summary_file, "a", encoding="utf-8") as f:
-                  f.write("### 📢 雑誌の更新を検知しました！\n\n")
+                  f.write("### 📢 雑誌・叢書の更新を検知しました！\n\n")
                   for title, issn, new in updates:
                       f.write(f"- **{title}** (ISSN: `{issn}`)\n")
-                      f.write(f"  - 新着: {new}\n")
+                      f.write(f"  - {new}\n")
           EOF
           
           python check_issues.py
@@ -132,15 +137,11 @@ jobs:
           git config user.name "github-actions"
           git config user.email "action@github.com"
           git add last_issues.json
-          # 古いテキストファイルが残っていたら自動的にお掃除します
-          rm -f last_issue.txt
-          git rm --cached --ignore-unmatch last_issue.txt || true
           git commit -m "Update multiple journal issues"
           git push
 
       - name: Notify via Email (Force Fail)
         if: env.CHANGED == 'true'
         run: |
-          echo "【通知】登録している学術誌の最新刊が更新されました！"
-          echo "詳細はGitHubのSummary（ログ画面）を確認してください。"
+          echo "【通知】登録している学術誌・叢書の最新刊が更新されました！"
           exit 1
