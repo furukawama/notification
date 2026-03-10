@@ -18,7 +18,7 @@ jobs:
         run: |
           # --- 設定エリア ---
           URL="https://www.degruyterbrill.com/journal/key/hzhz/html" # チェックしたいサイトURLに変えてください
-          TARGET_TEXT="<span class="dgb-volume-title">Volume 322</span> |"        # サイト内にある「変化を監視したい文字」を指定してください
+          TARGET_TEXT="hogehoge"        # サイト内にある「変化を監視したい文字」を指定してください
           # ----------------
 
           # サイトの内容を取得
