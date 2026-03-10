@@ -30,7 +30,6 @@ jobs:
           import json
           import time
 
-          # 監視対象の11誌
           journals = {
               "0018-2613": "Historische Zeitschrift",
               "0031-2746": "Past & Present",
@@ -59,18 +58,14 @@ jobs:
           new_state = {}
           updates = []
 
-          # 【重要】Polite Poolを利用するための身分証明（メールアドレスを書き換えてください）
+          # Polite Pool用のメールアドレスに書き換えてください
           headers = {
               "User-Agent": "GitHubActions-JournalChecker/1.1 (mailto:furukawama@gmail.com)"
           }
           
           url = "https://api.crossref.org/works"
           
-          print("Crossref API Polite Pool経由でデータを取得します...\n")
-          
           for issn, title in journals.items():
-              print(f"■ {title} ({issn}) を確認中...")
-              
               params = {"filter": f"issn:{issn}", "sort": "published", "order": "desc", "select": "volume,issue,title", "rows": 5}
               
               try:
@@ -78,9 +73,7 @@ jobs:
                   response.raise_for_status()
                   items = response.json().get("message", {}).get("items", [])
                   
-                  # ISSNで見つからない場合はシリーズ名・雑誌名でフォールバック検索
                   if not items:
-                      print(f"  -> ISSNで見つからないため、名称で再検索します...")
                       fallback_params = {
                           "query.container-title": title,
                           "sort": "published",
@@ -105,22 +98,17 @@ jobs:
                           latest_issue = f"Volume {vol}"
                       else:
                           short_title = item_title[:60] + "..." if len(item_title) > 60 else item_title
-                          latest_issue = f"最新論文/書籍: {short_title}"
+                          latest_issue = f"最新: {short_title}"
                   
                   if latest_issue:
                       new_state[issn] = latest_issue
                       if last_state.get(issn) != latest_issue:
                           updates.append((title, issn, latest_issue))
-                          print(f"  -> 💡 更新/取得成功: {latest_issue}")
                   else:
                       new_state[issn] = "データなし"
-                      print("  -> ⚠️ データなし (Crossref未登録の可能性)")
                       
               except Exception as e:
                   new_state[issn] = f"取得エラー"
-                  print(f"  -> ❌ エラー: {e}")
-                  
-              # サーバーへの負荷を下げるため、雑誌ごとの間隔を2秒に延長
               time.sleep(2)
 
           with open(state_file, "w", encoding="utf-8") as f:
@@ -134,7 +122,14 @@ jobs:
                   env_file = os.getenv('GITHUB_ENV')
                   with open(env_file, "a", encoding="utf-8") as env_f:
                       env_f.write("CHANGED=true\n")
-                      
+                  
+                  # 🍎 Apple Watch(Pushover)用の短いメッセージファイルを作成
+                  with open("pushover_msg.txt", "w", encoding="utf-8") as msg_f:
+                      for title, issn, new in updates:
+                          # Watchの画面に合わせて少し短く整形
+                          short_title = title[:25] + "..." if len(title) > 25 else title
+                          msg_f.write(f"📌 {short_title}\n{new}\n\n")
+
                   f.write("#### 📢 以下の更新・新規取得がありました！\n")
                   for title, issn, new in updates:
                       f.write(f"- **{title}** (`{issn}`)\n  - 新着: {new}\n")
@@ -161,8 +156,18 @@ jobs:
           git commit -m "Update multiple journal issues"
           git push
 
-      - name: Notify via Email (Force Fail)
+      - name: Notify via Pushover (Apple Watch)
         if: env.CHANGED == 'true'
         run: |
-          echo "【通知】登録している学術誌・叢書の最新刊が更新されました！"
-          exit 1
+          # 作成したApple Watch用メッセージを読み込む
+          MESSAGE=$(cat pushover_msg.txt)
+          
+          # Pushover API を叩いて手首に直接通知を送る
+          curl -s \
+            --form-string "token=${{ secrets.PUSHOVER_API_TOKEN }}" \
+            --form-string "user=${{ secrets.PUSHOVER_USER_KEY }}" \
+            --form-string "title=📚 新刊アップデート" \
+            --form-string "message=${MESSAGE}" \
+            https://api.pushover.net/1/messages.json
+            
+          # ※通知がPushover経由になったので、エラー(exit 1)でGitHubメールを飛ばす必要はなくなりました。
