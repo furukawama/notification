@@ -30,6 +30,7 @@ jobs:
           import json
           import time
 
+          # 監視対象の11誌
           journals = {
               "0018-2613": "Historische Zeitschrift",
               "0031-2746": "Past & Present",
@@ -58,16 +59,37 @@ jobs:
           new_state = {}
           updates = []
 
-          headers = {"User-Agent": "GitHubActions-JournalChecker/1.0"}
+          # 【重要】Polite Poolを利用するための身分証明（メールアドレスを書き換えてください）
+          headers = {
+              "User-Agent": "GitHubActions-JournalChecker/1.1 (mailto:furukawama@gmail.com)"
+          }
+          
+          url = "https://api.crossref.org/works"
+          
+          print("Crossref API Polite Pool経由でデータを取得します...\n")
           
           for issn, title in journals.items():
-              url = "https://api.crossref.org/works"
+              print(f"■ {title} ({issn}) を確認中...")
+              
               params = {"filter": f"issn:{issn}", "sort": "published", "order": "desc", "select": "volume,issue,title", "rows": 5}
               
               try:
                   response = requests.get(url, params=params, headers=headers, timeout=15)
                   response.raise_for_status()
                   items = response.json().get("message", {}).get("items", [])
+                  
+                  # ISSNで見つからない場合はシリーズ名・雑誌名でフォールバック検索
+                  if not items:
+                      print(f"  -> ISSNで見つからないため、名称で再検索します...")
+                      fallback_params = {
+                          "query.container-title": title,
+                          "sort": "published",
+                          "order": "desc",
+                          "select": "volume,issue,title",
+                          "rows": 5
+                      }
+                      response = requests.get(url, params=fallback_params, headers=headers, timeout=15)
+                      items = response.json().get("message", {}).get("items", [])
                   
                   latest_issue = None
                   if items:
@@ -89,17 +111,21 @@ jobs:
                       new_state[issn] = latest_issue
                       if last_state.get(issn) != latest_issue:
                           updates.append((title, issn, latest_issue))
+                          print(f"  -> 💡 更新/取得成功: {latest_issue}")
                   else:
                       new_state[issn] = "データなし"
+                      print("  -> ⚠️ データなし (Crossref未登録の可能性)")
                       
               except Exception as e:
                   new_state[issn] = f"取得エラー"
-              time.sleep(1)
+                  print(f"  -> ❌ エラー: {e}")
+                  
+              # サーバーへの負荷を下げるため、雑誌ごとの間隔を2秒に延長
+              time.sleep(2)
 
           with open(state_file, "w", encoding="utf-8") as f:
               json.dump(new_state, f, ensure_ascii=False, indent=2)
 
-          # 結果を環境変数とサマリーに書き込む
           summary_file = os.getenv('GITHUB_STEP_SUMMARY')
           with open(summary_file, "a", encoding="utf-8") as f:
               f.write("### 📚 監視ジャーナル・叢書 最新ステータス\n\n")
@@ -109,14 +135,14 @@ jobs:
                   with open(env_file, "a", encoding="utf-8") as env_f:
                       env_f.write("CHANGED=true\n")
                       
-                  f.write("#### 📢 以下の更新を検知しました！\n")
+                  f.write("#### 📢 以下の更新・新規取得がありました！\n")
                   for title, issn, new in updates:
                       f.write(f"- **{title}** (`{issn}`)\n  - 新着: {new}\n")
                   f.write("\n---\n")
               else:
                   f.write("*今回は新しい更新はありませんでした。*\n\n---\n")
                   
-              f.write("#### 🔍 全誌の現在の取得状況\n")
+              f.write("#### 🔍 全11誌の現在の取得状況\n")
               for issn, title in journals.items():
                   current = new_state.get(issn, "Unknown")
                   mark = "🆕" if any(u[1] == issn for u in updates) else "✔️"
